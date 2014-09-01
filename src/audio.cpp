@@ -14,6 +14,9 @@ Audio::Audio(QObject *parent)
         connect(&thread, SIGNAL(started()), SLOT(threadStarted()));
         thread.setObjectName("phoenix-audio");
 
+        original_sample_rate = 0;
+        deviation = 0.005;
+
         m_abuf = new AudioBuffer();
         Q_CHECK_PTR(m_abuf);
         //connect(m_abuf, SIGNAL(hasPeriodSize()), this, SLOT(handleHasPeriodSize()));
@@ -92,6 +95,18 @@ void Audio::handlePeriodTimer()
     int toWrite = aout->bytesFree();
     if(!toWrite)
         return;
+
+    if (!original_sample_rate)
+        original_sample_rate = afmt.sampleRate();
+
+    int half_size = aout->bufferSize() / 2;
+    int delta_mid = toWrite - half_size;
+    qreal direction = (qreal)delta_mid / half_size;
+    qreal adjust = 1.0 + deviation * direction;
+
+    afmt.setSampleRate(original_sample_rate * adjust);
+
+    qCDebug(phxAudio) << afmt.sampleRate();
 
     QVarLengthArray<char, 4096*4> tmpbuf(toWrite);
     int read = m_abuf->read(tmpbuf.data(), toWrite);

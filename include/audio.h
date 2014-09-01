@@ -42,6 +42,8 @@ private slots:
 
 private:
     bool isRunning; // is core running
+    int original_sample_rate;
+    qreal deviation;
     QAudioFormat afmt;
     QAudioOutput *aout;
     QIODevice *aio;
