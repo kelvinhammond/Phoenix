@@ -7,12 +7,17 @@
 #include <QTimer>
 #include <QAudioOutput>
 #include <QDebug>
+extern "C"
+{
+#include <libswresample/swresample.h>
+}
 
 #include "audiobuffer.h"
 #include "logging.h"
 
 
-class Audio : public QObject {
+class Audio : public QObject
+{
     Q_OBJECT
 public:
     Audio(QObject * = 0);
@@ -21,7 +26,7 @@ public:
     void start();
     void setFormat(QAudioFormat _afmt);
 
-    AudioBuffer* abuf() const
+    AudioBuffer *abuf() const
     {
         return m_abuf;
     }
@@ -42,14 +47,15 @@ private slots:
 
 private:
     bool isRunning; // is core running
-    int original_sample_rate;
     qreal deviation;
-    QAudioFormat afmt;
+    QAudioFormat afmt_out;
+    QAudioFormat afmt_in;
     QAudioOutput *aout;
     QIODevice *aio;
     AudioBuffer *m_abuf;
     QThread thread;
     QTimer timer;
+    SwrContext *swresample;
 };
 
 #endif

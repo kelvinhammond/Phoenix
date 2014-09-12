@@ -1,5 +1,11 @@
 
 
+extern "C"
+{
+#include <libavutil/channel_layout.h>
+#include <libavutil/opt.h>
+}
+
 #include "audio.h"
 
 
@@ -8,13 +14,13 @@ Audio::Audio(QObject *parent)
               isRunning(false),
               aout(nullptr),
               aio(nullptr),
-              timer(this)
+              timer(this),
+              swresample(nullptr)
 {
         this->moveToThread(&thread);
         connect(&thread, SIGNAL(started()), SLOT(threadStarted()));
         thread.setObjectName("phoenix-audio");
 
-        original_sample_rate = 0;
         deviation = 0.005;
 
         m_abuf = new AudioBuffer();
@@ -37,12 +43,23 @@ void Audio::start()
 void Audio::setFormat(QAudioFormat _afmt)
 {
     qCDebug(phxAudio, "setFormat(%iHz %ibits)", _afmt.sampleRate(), _afmt.sampleSize());
-/*    QAudioDeviceInfo info(QAudioDeviceInfo::defaultOutputDevice());
-    if (!info.isFormatSupported(_afmt)) {
-        qCWarning(phxAudio) << "Audio format not supported by output device !";
-        return;
-    }*/
-    afmt = _afmt;
+    QAudioDeviceInfo info(QAudioDeviceInfo::defaultOutputDevice());
+
+    afmt_in = _afmt;
+    afmt_out = info.nearestFormat(_afmt); // try using the nearest supported format
+    if (afmt_out.sampleRate() < afmt_in.sampleRate()) {
+        // if that got us a format with a worse sample rate, use preferred format
+        afmt_out = info.preferredFormat();
+    }
+    qCDebug(phxAudio, "Using nearest format supported by sound card: %iHz %ibits",
+                      afmt_out.sampleRate(), afmt_out.sampleSize());
+
+    swresample = swr_alloc_set_opts(swresample,
+            AV_CH_LAYOUT_STEREO, AV_SAMPLE_FMT_S16, afmt_out.sampleRate(),
+            AV_CH_LAYOUT_STEREO, AV_SAMPLE_FMT_S16, afmt_in.sampleRate(),
+            0, nullptr
+    );
+    swr_init(swresample);
     emit formatChanged();
 }
 
@@ -52,7 +69,7 @@ void Audio::handleFormatChanged()
         aout->stop();
         delete aout;
     }
-    aout = new QAudioOutput(afmt);
+    aout = new QAudioOutput(afmt_out);
     Q_CHECK_PTR(aout);
     aout->moveToThread(&thread);
 
@@ -61,13 +78,13 @@ void Audio::handleFormatChanged()
     if (!isRunning)
         aout->suspend();
 
-    timer.setInterval(afmt.durationForBytes(aout->periodSize() * 1.5) / 1000);
+    timer.setInterval(afmt_out.durationForBytes(aout->periodSize() * 1.5) / 1000);
     aio->moveToThread(&thread);
 }
 
 void Audio::threadStarted()
 {
-    if(!afmt.isValid()) {
+    if(!afmt_in.isValid()) {
         // we don't have a valid audio format yet...
         qCDebug(phxAudio) << "afmt is not valid";
         return;
@@ -90,22 +107,26 @@ void Audio::handlePeriodTimer()
     if(!toWrite)
         return;
 
-    if (!original_sample_rate)
-        original_sample_rate = afmt.sampleRate();
-
     int half_size = aout->bufferSize() / 2;
     int delta_mid = toWrite - half_size;
     qreal direction = (qreal)delta_mid / half_size;
     qreal adjust = 1.0 + deviation * direction;
 
-    afmt.setSampleRate(original_sample_rate * adjust);
+    QVarLengthArray<char, 4096*4> tmpbuf(m_abuf->size());
+    int read = m_abuf->read(tmpbuf.data(), tmpbuf.size());
 
-    qCDebug(phxAudio) << afmt.sampleRate();
+    uint8_t *output;
+    int samplesToWrite = afmt_out.framesForBytes(toWrite);
+    av_samples_alloc(&output, NULL, 2, samplesToWrite, AV_SAMPLE_FMT_S16, 0);
 
-    QVarLengthArray<char, 4096*4> tmpbuf(toWrite);
-    int read = m_abuf->read(tmpbuf.data(), toWrite);
-    int wrote = aio->write(tmpbuf.data(), read);
+    const uint8_t *input[] = { (const uint8_t *)tmpbuf.data() };
+    int converted = swr_convert(swresample, &output, samplesToWrite,
+                                input, read / afmt_in.bytesPerFrame());
+//    qCDebug(phxAudio) << converted << toWrite << aout->bufferSize();
+
+    int wrote = aio->write((char *)output, afmt_out.bytesForFrames(converted));
     Q_UNUSED(wrote);
+    av_freep(&output);
 }
 
 void Audio::runChanged(bool _isRunning)
