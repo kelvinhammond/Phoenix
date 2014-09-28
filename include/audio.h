@@ -7,10 +7,7 @@
 #include <QTimer>
 #include <QAudioOutput>
 #include <QDebug>
-extern "C"
-{
-#include <libswresample/swresample.h>
-}
+#include <soxr.h>
 
 #include "audiobuffer.h"
 #include "logging.h"
@@ -55,7 +52,7 @@ private:
     AudioBuffer *m_abuf;
     QThread thread;
     QTimer timer;
-    SwrContext *swresample;
+    soxr_t soxr; // soxr_t is a pointer
 };
 
 #endif

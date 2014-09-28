@@ -1,11 +1,5 @@
 
 
-extern "C"
-{
-#include <libavutil/channel_layout.h>
-#include <libavutil/opt.h>
-}
-
 #include "audio.h"
 
 
@@ -15,7 +9,7 @@ Audio::Audio(QObject *parent)
               aout(nullptr),
               aio(nullptr),
               timer(this),
-              swresample(nullptr)
+              soxr(nullptr)
 {
         this->moveToThread(&thread);
         connect(&thread, SIGNAL(started()), SLOT(threadStarted()));
@@ -51,15 +45,20 @@ void Audio::setFormat(QAudioFormat _afmt)
         // if that got us a format with a worse sample rate, use preferred format
         afmt_out = info.preferredFormat();
     }
+    qCDebug(phxAudio) << afmt_out;
     qCDebug(phxAudio, "Using nearest format supported by sound card: %iHz %ibits",
                       afmt_out.sampleRate(), afmt_out.sampleSize());
 
-    swresample = swr_alloc_set_opts(swresample,
-            AV_CH_LAYOUT_STEREO, AV_SAMPLE_FMT_S16, afmt_out.sampleRate(),
-            AV_CH_LAYOUT_STEREO, AV_SAMPLE_FMT_S16, afmt_in.sampleRate(),
-            0, nullptr
+    soxr_error_t error;
+    soxr_quality_spec_t q_spec = soxr_quality_spec(SOXR_HQ, SOXR_VR);
+    soxr_io_spec_t io_spec = soxr_io_spec(SOXR_INT16_I, SOXR_INT16_I);
+    soxr = soxr_create(
+        afmt_in.sampleRate(), afmt_out.sampleRate(), 2,
+        &error,
+        &io_spec, &q_spec, NULL
     );
-    swr_init(swresample);
+    if (error) {}
+
     emit formatChanged();
 }
 
@@ -115,18 +114,25 @@ void Audio::handlePeriodTimer()
     QVarLengthArray<char, 4096*4> tmpbuf(m_abuf->size());
     int read = m_abuf->read(tmpbuf.data(), tmpbuf.size());
 
-    uint8_t *output;
     int samplesToWrite = afmt_out.framesForBytes(toWrite);
-    av_samples_alloc(&output, NULL, 2, samplesToWrite, AV_SAMPLE_FMT_S16, 0);
+    soxr_set_io_ratio(soxr, adjust, samplesToWrite);
 
-    const uint8_t *input[] = { (const uint8_t *)tmpbuf.data() };
-    int converted = swr_convert(swresample, &output, samplesToWrite,
-                                input, read / afmt_in.bytesPerFrame());
-//    qCDebug(phxAudio) << converted << toWrite << aout->bufferSize();
+    char *obuf = new char[toWrite];
+    size_t odone;
+    soxr_error_t error = soxr_process(
+        soxr,
+        tmpbuf.data(), afmt_in.framesForBytes(read),
+        NULL,
+        obuf, samplesToWrite,
+        &odone
+    );
 
-    int wrote = aio->write((char *)output, afmt_out.bytesForFrames(converted));
+    if (error) {
+        qCDebug(phxAudio) << "Resampling Error";
+    }
+
+    int wrote = aio->write(obuf, afmt_out.bytesForFrames(odone));
     Q_UNUSED(wrote);
-    av_freep(&output);
 }
 
 void Audio::runChanged(bool _isRunning)

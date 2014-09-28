@@ -10,7 +10,7 @@ VERSION = 0.1
 
 DEFINES += '"PHOENIX_VERSION=\\"$$VERSION\\""'
 
-LIBS += -lavutil -lswresample -lSDL2
+LIBS += -lsoxr -lSDL2
 
 linux-g++ {
     QMAKE_CXXFLAGS_RELEASE = -D_FORTIFY_SOURCE=2
