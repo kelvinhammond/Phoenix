@@ -57,6 +57,7 @@ void Audio::setFormat(QAudioFormat _afmt)
         &error,
         &io_spec, &q_spec, NULL
     );
+    soxr_io_ratio = (double)afmt_in.sampleRate() / afmt_out.sampleRate();
     if (error) {}
 
     emit formatChanged();
@@ -111,11 +112,18 @@ void Audio::handlePeriodTimer()
     qreal direction = (qreal)delta_mid / half_size;
     qreal adjust = 1.0 + deviation * direction;
 
-    QVarLengthArray<char, 4096*4> tmpbuf(m_abuf->size());
+    // Compute the exact number of bytes to read from the circular buffer to
+    // produce toWrite bytes of output; Taking resampling and DRC into account
+    double new_ratio = soxr_io_ratio * adjust;
+    auto afmt_tmp = afmt_in;
+    afmt_tmp.setSampleRate(afmt_out.sampleRate() * new_ratio);
+    int toRead = afmt_tmp.bytesForDuration(afmt_out.durationForBytes(toWrite));
+
+    QVarLengthArray<char, 4096*4> tmpbuf(toRead);
     int read = m_abuf->read(tmpbuf.data(), tmpbuf.size());
 
     int samplesToWrite = afmt_out.framesForBytes(toWrite);
-    soxr_set_io_ratio(soxr, adjust, samplesToWrite);
+    soxr_set_io_ratio(soxr, new_ratio, 0);
 
     char *obuf = new char[toWrite];
     size_t odone;

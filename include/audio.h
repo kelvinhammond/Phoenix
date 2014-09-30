@@ -53,6 +53,7 @@ private:
     QThread thread;
     QTimer timer;
     soxr_t soxr; // soxr_t is a pointer
+    double soxr_io_ratio;
 };
 
 #endif
