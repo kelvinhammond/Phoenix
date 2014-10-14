@@ -22,6 +22,7 @@ Audio::Audio(QObject *parent)
         //connect(m_abuf, SIGNAL(hasPeriodSize()), this, SLOT(handleHasPeriodSize()));
 
         timer.moveToThread(&thread);
+        timer.setTimerType(Qt::PreciseTimer);
         connect(&timer, SIGNAL(timeout()), this, SLOT(handlePeriodTimer()));
 
         // we need send this signal to ourselves
@@ -30,7 +31,7 @@ Audio::Audio(QObject *parent)
 
 void Audio::start()
 {
-    thread.start(QThread::HighestPriority);
+    thread.start(QThread::TimeCriticalPriority);
 }
 
 /* This needs to be called on the audio thread*/
@@ -78,7 +79,7 @@ void Audio::handleFormatChanged()
     if (!isRunning)
         aout->suspend();
 
-    timer.setInterval(afmt_out.durationForBytes(aout->periodSize() * 1.5) / 1000);
+    timer.setInterval(afmt_out.durationForBytes(aout->periodSize() * 1.0) / 1000);
     aio->moveToThread(&thread);
 }
 
@@ -110,7 +111,7 @@ void Audio::handlePeriodTimer()
     int half_size = aout->bufferSize() / 2;
     int delta_mid = toWrite - half_size;
     qreal direction = (qreal)delta_mid / half_size;
-    qreal adjust = 1.0 + deviation * direction;
+    qreal adjust = 1.0 + deviation * -direction;
 
     // Compute the exact number of bytes to read from the circular buffer to
     // produce toWrite bytes of output; Taking resampling and DRC into account
@@ -118,6 +119,9 @@ void Audio::handlePeriodTimer()
     auto afmt_tmp = afmt_in;
     afmt_tmp.setSampleRate(afmt_out.sampleRate() * new_ratio);
     int toRead = afmt_tmp.bytesForDuration(afmt_out.durationForBytes(toWrite));
+
+//    qCDebug(phxAudio) << (((double)(aout->bufferSize() - toWrite) / aout->bufferSize()) * 100) << "% full ; DRC:" << adjust
+//                      << ";" << toRead << afmt_in.bytesForDuration(afmt_out.durationForBytes(toWrite));
 
     QVarLengthArray<char, 4096*4> tmpbuf(toRead);
     int read = m_abuf->read(tmpbuf.data(), tmpbuf.size());
@@ -166,6 +170,7 @@ void Audio::runChanged(bool _isRunning)
 void Audio::stateChanged(QAudio::State s)
 {
     if(s == QAudio::IdleState && aout->error() == QAudio::UnderrunError) {
+        qCDebug(phxAudio) << "Underrun";
         aio = aout->start();
     }
     if(s != QAudio::IdleState && s != QAudio::ActiveState) {
