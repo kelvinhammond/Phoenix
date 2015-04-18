@@ -75,24 +75,50 @@ struct LibretroSymbols {
 class Core: public QObject {
         Q_OBJECT
 
+    enum CoreState {
+        WAITING,
+        BUSY,
+        LOAD_CORE_ERROR,
+        LOAD_GAME_ERROR
+    };
+
+    // Constructors, mutexes
     public:
 
         Core();
         ~Core();
 
-        //signals:
+        //
+        // Mutexes
+        //
 
+        // A mutex to serialize access to private members of Core
+        QMutex coreMutex;
 
-        // public slots:
+    signals:
+        void signalCoreStateChanged( Core newCore );
+
+    public slots:
+
+        //
+        // Setters
+        //
+        void slotSetSystemDirectory( QString systemDirectory );
+        void slotSetSaveDirectory( QString saveDirectory );
+        void slotSetSystemDirectory( QString systemDirectory );
+        void slotSetSaveDirectory( QString saveDirectory );
 
         //
         // Control
         //
 
-        bool slotLoadCore( const char *path );
-        bool slotLoadGame( const char *path );
-        void slotSetSystemDirectory( QString system_directory );
-        void slotSetSaveDirectory( QString save_directory );
+        // Load a libretro core at the given path
+        // Sets ERROR state if unable to load
+        void slotLoadCore( const char *path );
+
+        // Load a game with the given path
+        // Sets ERROR state if unable to load
+        void slotLoadGame( const char *path );
 
         void slotDoFrame();
 
@@ -100,7 +126,7 @@ class Core: public QObject {
         // Audio
         //
 
-        void setAudioBuf( AudioBuffer buf );
+        void slotSetAudioBuf( AudioBuffer buf );
 
         //
         // Video
@@ -114,106 +140,36 @@ class Core: public QObject {
         // Misc.
         //
 
+    private:
 
         //
-        // Control
-        //
-
-        // Load a libretro core at the given path
-        // Returns: true if successful, false otherwise
-        bool loadCore( const char *path );
-
-        // Load a game with the given path
-        // Returns: true if the game was successfully loaded, false otherwise
-        bool loadGame( const char *path );
-
-        // Run core for one frame
-        void doFrame();
-
-        //
-        // Misc
+        // Misc.
         //
 
         // A pointer to the last instance of the class used
-        static Core *core;
+        static Core *coreStatic;
 
-        LibretroSymbols *getSymbols();
-        QByteArray getLibraryName() {
-            return library_name;
-        }
-
-        bool saveGameState( QString save_path, QString game_name );
-        bool loadGameState( QString save_path, QString game_name );
+        QString save_path;
+        QString game_name;
 
         //
         // Video
         //
 
-        retro_hw_render_callback getHWData() const {
-            return hw_callback;
-        }
-        const void *getImageData() const {
-            return video_data;
-        }
-        unsigned getBaseWidth() const {
-            return video_width;
-        }
-        unsigned getBaseHeight() const {
-            return video_height;
-        }
-        unsigned getMaxWidth() const {
-            return system_av_info->geometry.max_width;
-        }
-        unsigned getMaxHeight() const {
-            return system_av_info->geometry.max_height;
-        }
-        size_t getPitch() const {
-            return video_pitch;
-        }
-        retro_pixel_format getPixelFormat() const {
-            return pixel_format;
-        }
-        const retro_system_info *getSystemInfo() const {
-            return system_info;
-        }
-        float getAspectRatio() const {
-            if( system_av_info->geometry.aspect_ratio ) {
-                return system_av_info->geometry.aspect_ratio;
-            }
-
-            return ( float )system_av_info->geometry.base_width / system_av_info->geometry.base_height;
-        }
-
         //
         // Audio
         //
 
-        AudioBuffer *audio_buf;
-        //const int16_t *getAudioData() const { return audio_data; };
-        //size_t getAudioFrames() const { return audio_frames; };
-        //int16_t getLeftChannel() const { return left_channel; };
-        //int16_t getRightChannel() const { return right_channel; };
 
         //
         // System
         //
 
-        void setSystemDirectory( QString system_directory );
-        void setSaveDirectory( QString save_directory );
-
         //
         // Timing
         //
 
-        double getFps() const {
-            return system_av_info->timing.fps;
-        }
-        double getSampleRate() const {
-            return system_av_info->timing.sample_rate;
-        }
-        bool isDupeFrame() const {
-            return is_dupe_frame;
-        }
+        // ===================================================
 
         // Container class for a libretro core variable
         class Variable {
@@ -280,47 +236,59 @@ class Core: public QObject {
 
         };
 
-    private:
-        // Handle to the libretro core
-        QLibrary *libretro_core;
-        QByteArray library_name;
 
-        // Struct containing libretro methods
-        LibretroSymbols *symbols;
 
         // Information about the core
-        retro_system_av_info *system_av_info;
-        retro_system_info *system_info;
+        retro_system_av_info *AVInfo;
+        retro_system_info *systemInfo;
         QMap<std::string, Core::Variable> variables;
 
         // Do something with retro_variable
-        retro_input_descriptor input_descriptor;
-        retro_game_geometry game_geometry;
-        retro_system_timing system_timing;
-        retro_hw_render_callback hw_callback;
-        bool full_path_needed;
-        QByteArray system_directory;
-        QByteArray save_directory;
+        retro_game_geometry videoDimensions;
+        retro_hw_render_callback OpenGLContext;
+        bool coreNeedsFullPath;
+        QByteArray systemDirectory;
+        QByteArray saveDirectory;
 
-        // Game
-        QByteArray game_data;
+        //
+        // Core
+        //
+
+        // Handle to library shared object file (.dll, .dylib, .so)
+        QLibrary *library;
+
+        // ASCII representation of the library's filename
+        QByteArray libraryName;
+
+        // Struct containing libretro methods
+        LibretroSymbols *methods;
+
+        // Game data (ROM or ISO) in memory
+        QByteArray gameData;
+
+        //
+        // Audio
+        //
+
+        // Buffer that holds buffer data
+        AudioBuffer *audioBuffer;
 
         // Video
-        unsigned video_height;
-        const void *video_data;
+        unsigned videoHeight;
+        const void *videoBuffer;
         size_t video_pitch;
         unsigned video_width;
         retro_pixel_format pixel_format;
 
-        // Audio
-        int16_t left_channel;
-        int16_t right_channel;
+        // Input
+        retro_input_descriptor retropadToController;
 
         // Timing
-        bool is_dupe_frame;
+        retro_system_timing timing;
+        bool isCurrentFrameDupe;
 
         // Misc
-        void *m_sram;
+        void *SRAMDataRaw;
         void saveSRAM();
         void loadSRAM();
 

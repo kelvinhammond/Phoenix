@@ -16,7 +16,7 @@ VideoItem::VideoItem() {
     m_aspect_ratio = 0.0;
     m_fps = 0;
     audio->startAudioThread();
-    core->audio_buf = audio->getAudioBuf();
+    core->audioBuffer = audio->getAudioBuf();
     m_volume = 1.0;
 
     connect( &fps_timer, &QTimer::timeout, this, &VideoItem::updateFps );
