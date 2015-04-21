@@ -107,7 +107,8 @@ HEADERS += include/core.h                      \
            include/phoenixglobals.h            \
            include/phoenixlibraryhelper.h      \
            include/utilities.h                 \
-           include/usernotifications.h         \
+           include/usernotifications.h \
+    include/corecontroller.h
 
 SOURCES += src/main.cpp                        \
            src/videoitem.cpp                   \
@@ -134,7 +135,8 @@ SOURCES += src/main.cpp                        \
            src/phoenixlibraryhelper.cpp        \
            src/phoenixglobals.cpp              \
            src/utilities.cpp                   \
-           src/usernotifications.cpp           \
+           src/usernotifications.cpp \
+    src/corecontroller.cpp
 
 RESOURCES = qml/qml.qrc assets/assets.qrc
 

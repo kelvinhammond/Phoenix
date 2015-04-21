@@ -9,19 +9,21 @@
 #include <QMap>
 #include <QLibrary>
 #include <QObject>
+#include <QFileDevice>
 
 #include "libretro.h"
 #include "audiobuffer.h"
 #include "logging.h"
 #include "inputmanager.h"
 #include "keyboard.h"
+#include "corecontroller.h"
 
 /* The Core class is a wrapper around any given libretro core.
  * The general functionality for this class is to load the core into memory,
  * connect to all of the core's callbacks, such as video and audio rendering,
  * and generate frames of video and audio data in the raw memory format.
  *
- * The Core class is instantiated inside of the VideoItem class, which lives in the videoitem.cpp file.
+ * The Core class is instantiated inside of the CoreController class, which lives in the corecontroller.cpp file.
  * Currently this approach only supports loading a single core and game at any one time.
  *
  * Check out the static callbacks in order to see how data is passed from the core, to the screen.
@@ -75,14 +77,7 @@ struct LibretroSymbols {
 class Core: public QObject {
         Q_OBJECT
 
-    enum CoreState {
-        WAITING,
-        BUSY,
-        LOAD_CORE_ERROR,
-        LOAD_GAME_ERROR
-    };
-
-    // Constructors, mutexes
+        // Constructors, mutexes
     public:
 
         Core();
@@ -96,7 +91,8 @@ class Core: public QObject {
         QMutex coreMutex;
 
     signals:
-        void signalCoreStateChanged( Core newCore );
+        void coreState( CoreController::CoreControllerStateEnum state );
+        void coreError( CoreController::CoreControllerErrorEnum error );
 
     public slots:
 
@@ -113,12 +109,12 @@ class Core: public QObject {
         //
 
         // Load a libretro core at the given path
-        // Sets ERROR state if unable to load
-        void slotLoadCore( const char *path );
+        // Signals appropiate error if unable to load
+        void loadCore( const char *path );
 
-        // Load a game with the given path
-        // Sets ERROR state if unable to load
-        void slotLoadGame( const char *path );
+        // Load a game at the given path
+        // Signals appropiate error if unable to load
+        void loadGame( const char *path );
 
         void slotDoFrame();
 
@@ -146,7 +142,7 @@ class Core: public QObject {
         // Misc.
         //
 
-        // A pointer to the last instance of the class used
+        // A static pointer to the (only) instance of the class.
         static Core *coreStatic;
 
         QString save_path;
@@ -169,7 +165,18 @@ class Core: public QObject {
         // Timing
         //
 
-        // ===================================================
+        //
+        // Misc
+        //
+
+        // Callbacks
+        static void audioSampleCallback( int16_t left, int16_t right );
+        static size_t audioSampleBatchCallback( const int16_t *data, size_t frames );
+        static bool environmentCallback( unsigned cmd, void *data );
+        static void inputPollCallback( void );
+        static void logCallback( enum retro_log_level level, const char *fmt, ... );
+        static int16_t inputStateCallback( unsigned port, unsigned device, unsigned index, unsigned id );
+        static void videoRefreshCallback( const void *data, unsigned width, unsigned height, size_t pitch );
 
         // Container class for a libretro core variable
         class Variable {
@@ -236,7 +243,7 @@ class Core: public QObject {
 
         };
 
-
+        // ===================================================
 
         // Information about the core
         retro_system_av_info *AVInfo;
@@ -246,7 +253,7 @@ class Core: public QObject {
         // Do something with retro_variable
         retro_game_geometry videoDimensions;
         retro_hw_render_callback OpenGLContext;
-        bool coreNeedsFullPath;
+        bool coreReadsFileDirectly;
         QByteArray systemDirectory;
         QByteArray saveDirectory;
 
@@ -258,13 +265,20 @@ class Core: public QObject {
         QLibrary *library;
 
         // ASCII representation of the library's filename
-        QByteArray libraryName;
+        QByteArray libraryFilename;
 
         // Struct containing libretro methods
         LibretroSymbols *methods;
 
-        // Game data (ROM or ISO) in memory
+        //
+        // Game
+        //
+
+        // Game data (ROM or ISO) in memory. Used only by cores that don't read files by themselves.
         QByteArray gameData;
+
+        // A struct passed to the core containing either a pointer to game data or the game file's path, along with some metadata.
+        retro_game_info gameInfo;
 
         //
         // Audio
@@ -285,21 +299,14 @@ class Core: public QObject {
 
         // Timing
         retro_system_timing timing;
-        bool isCurrentFrameDupe;
+        bool currentFrameIsDupe;
 
         // Misc
         void *SRAMDataRaw;
         void saveSRAM();
         void loadSRAM();
 
-        // Callbacks
-        static void audioSampleCallback( int16_t left, int16_t right );
-        static size_t audioSampleBatchCallback( const int16_t *data, size_t frames );
-        static bool environmentCallback( unsigned cmd, void *data );
-        static void inputPollCallback( void );
-        static void logCallback( enum retro_log_level level, const char *fmt, ... );
-        static int16_t inputStateCallback( unsigned port, unsigned device, unsigned index, unsigned id );
-        static void videoRefreshCallback( const void *data, unsigned width, unsigned height, size_t pitch );
+
 };
 
 // Do not scope this globally anymore, it is not thread-safe

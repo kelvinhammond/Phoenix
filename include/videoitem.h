@@ -21,7 +21,10 @@
 #include "keyboard.h"
 #include "logging.h"
 
-/* Think of VideoItem as a QML Rectangle, that has its texture constantly changing.
+/*
+ * VideoItem is essentially a libretro frontend in the form of a QML item.
+ *
+ * Think of it as a QML Rectangle, that has its texture constantly changing.
  * It's exposed to QML, as the VideoItem type, and is instantiated from inside of the
  * GameView.qml file.
  *
@@ -29,22 +32,22 @@
  * be run at a lower frame rate than 60.
  *
  * Internally, this class acts as the controller for the libretro core, Core, and the audio output controller, Audio.
- * This essentially makes it a libretro frontend in the form of a QML item.
  */
 
 class VideoItem : public QQuickItem {
         Q_OBJECT
 
-        Q_PROPERTY( QString libcore READ libcore WRITE setCore NOTIFY libcoreChanged )
-        Q_PROPERTY( QString game READ game WRITE setGame NOTIFY gameChanged )
-        Q_PROPERTY( bool isRunning READ isRunning WRITE setRun NOTIFY runChanged )
-        Q_PROPERTY( bool setWindowed READ setWindowed WRITE setWindowed NOTIFY setWindowedChanged )
-        Q_PROPERTY( QString systemDirectory READ systemDirectory WRITE setSystemDirectory NOTIFY systemDirectoryChanged )
-        Q_PROPERTY( int fps READ fps NOTIFY fpsChanged )
-        Q_PROPERTY( qreal volume READ volume WRITE setVolume NOTIFY volumeChanged )
-        Q_PROPERTY( int filtering READ filtering WRITE setFiltering NOTIFY filteringChanged )
-        Q_PROPERTY( bool stretchVideo READ stretchVideo WRITE setStretchVideo NOTIFY stretchVideoChanged )
-        Q_PROPERTY( qreal aspectRatio READ aspectRatio WRITE setAspectRatio NOTIFY aspectRatioChanged )
+        // Expose members of the class to QML
+        Q_PROPERTY( QString corePath MEMBER corePath NOTIFY corePathChanged )
+        Q_PROPERTY( QString gamePath MEMBER gamePath NOTIFY gamePathChanged )
+        Q_PROPERTY( QString systemPath MEMBER systemPath NOTIFY systemPathChanged )
+        Q_PROPERTY( int filteringMode MEMBER filteringMode NOTIFY filteringChanged )
+        Q_PROPERTY( bool stretchVideo MEMBER stretchVideo NOTIFY stretchVideoChanged )
+        Q_PROPERTY( qreal aspectRatio MEMBER aspectRatio NOTIFY aspectRatioChanged )
+        Q_PROPERTY( bool isWindowed MEMBER isWindowed NOTIFY isWindowedChanged )
+        Q_PROPERTY( bool isRunning MEMBER isRunning NOTIFY isRunningChanged )
+        Q_PROPERTY( int currentFPS MEMBER currentFPS NOTIFY currentFPSChanged )
+        Q_PROPERTY( qreal currentVolume MEMBER currentVolume NOTIFY currentVolumeChanged )
 
 
     public:
@@ -53,59 +56,6 @@ class VideoItem : public QQuickItem {
 
         void initShader();
         void initGL();
-        void setCore( QString libcore );
-        void setGame( QString game );
-        void setRun( bool isRunning );
-        void setWindowed( bool setWindowed );
-        void setSystemDirectory( QString systemDirectory );
-        void setTexture();
-        void setVolume( qreal volume );
-        void setFiltering( int filtering );
-        void setStretchVideo( bool stretchVideo );
-        void setAspectRatio( qreal aspectRatio );
-
-
-        QString libcore() const {
-            return m_libcore;
-        }
-
-        QString game() const {
-            return m_game;
-        }
-
-        bool isRunning() const {
-            return m_run;
-        }
-
-        bool setWindowed() const {
-            return m_set_windowed;
-        }
-
-        QString systemDirectory() const {
-            return m_system_directory;
-        }
-
-        int fps() const {
-            return m_fps;
-        }
-
-        qreal volume() const {
-            return m_volume;
-        }
-
-        int filtering() const {
-            return m_filtering;
-        }
-
-        bool stretchVideo() const {
-            return m_stretch_video;
-        }
-
-        qreal aspectRatio() const {
-            return m_aspect_ratio;
-        }
-
-
 
 
     protected:
@@ -119,14 +69,14 @@ class VideoItem : public QQuickItem {
         QSGNode *updatePaintNode( QSGNode *, UpdatePaintNodeData * );
 
     signals:
-        void libcoreChanged( QString );
-        void gameChanged( QString );
-        void runChanged( bool );
-        void setWindowedChanged( bool );
-        void systemDirectoryChanged();
-        void saveDirectoryChanged();
-        void fpsChanged( int );
-        void volumeChanged( qreal );
+        void corePathChanged( QString );
+        void gamePathChanged( QString );
+        void isRunningChanged( bool );
+        void isWindowedChanged( bool );
+        void systemPathChanged();
+        void signalSaveDirectoryChanged();
+        void currentFPSChanged( int );
+        void currentVolumeChanged( qreal );
         void filteringChanged();
         void stretchVideoChanged();
         void aspectRatioChanged();
@@ -146,9 +96,9 @@ class VideoItem : public QQuickItem {
         }
         void handleSceneGraphInitialized();
         void updateFps() {
-            m_fps = fps_count * ( 1000.0 / fps_timer.interval() );
+            currentFPS = fps_count * ( 1000.0 / fps_timer.interval() );
             fps_count = 0;
-            emit fpsChanged( m_fps );
+            emit currentFPSChanged( currentFPS );
         }
 
 
@@ -165,20 +115,20 @@ class VideoItem : public QQuickItem {
         QTimer fps_timer;
         QElapsedTimer frame_timer;
         qint64 fps_deviation;
-        int m_filtering;
-        bool m_stretch_video;
-        qreal m_aspect_ratio;
+        int filteringMode;
+        bool stretchVideo;
+        qreal aspectRatio;
         // [1]
 
         // Qml defined variables
         // [2]
-        QString m_system_directory;
-        QString m_libcore;
-        QString m_game;
-        bool m_set_windowed;
-        bool m_run;
-        int m_fps;
-        qreal m_volume;
+        QString systemPath;
+        QString corePath;
+        QString gamePath;
+        bool isWindowed;
+        bool isRunning;
+        int currentFPS;
+        qreal currentVolume;
         //[2]
 
         // Audio
@@ -187,7 +137,7 @@ class VideoItem : public QQuickItem {
         void updateAudioFormat();
         //[3]
 
-        void refreshItemGeometry(); // called every time the item's with/height/x/y change
+        void refreshItemGeometry(); // called every time the item's width/height/x/y change
 
         bool limitFps(); // return true if it's too soon to ask for another frame
 

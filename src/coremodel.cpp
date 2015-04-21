@@ -1,5 +1,7 @@
 #include "coremodel.h"
 
+// A container object for a core file (.dll, .dylib, .so)
+
 CoreModel::CoreModel( QObject *parent, QString coreName, QString corePath )
     : QObject( parent ) {
     m_core_name = coreName;

@@ -10,29 +10,31 @@ import QtQuick.Window 2.0
 
 Rectangle {
 
-    // This qml component is another one of the components
-    // that are managed by the 'gameStack'.
-
-    // This component isRunnings and shows the video frames from the libretro core onto
-    // the screen.
+    // GameView is a qml component that takes on the role analogous to both a games console and TV screen.
+    // It instantiates a CoreController and VideoItem, then passes a reference to VideoItem to CoreController
+    // when the time is right so CoreController has somewhere to output video to.
 
     id: gameView;
     width: 800;
     height: 600;
     visible: true;
     color: "black";
+
+    // Master power for the 'console'. Make sure to set paths correctly before turning on.
+    property bool isOn: false;
+    property string gamePath: "";
+    property string corePath: "";
+
+    // Old properties
     property string stackName: "gameview";
     property bool isRunning: false;
-    property string gameName: "";
-    property string coreName: "";
     property bool loadSaveState: false
     property bool saveGameState: false;
-    property alias video: videoItem;
+    // property alias video: videoItem;
     property alias gameMouse: gameMouse;
     property string previousViewIcon: "";
 
-    function checkVisibility(visible)
-    {
+    function checkVisibility(visible) {
         if (visible) {
             ranOnce = true;
             timerEffects();
@@ -132,17 +134,17 @@ Rectangle {
         height: parent.height;
         width: stretchVideo ? parent.width : height * aspectRatio;
 
-        systemDirectory: phoenixGlobals.biosPath();
-        libcore: gameView.coreName;
-        game: gameView.gameName;
+        libretroCorePath: gameView.coreName;
+        systemPath: phoenixGlobals.biosPath();
+        gamePath: gameView.gameName;
         isRunning: gameView.isRunning;
-        volume: root.volumeLevel;
-        filtering: root.filtering;
+        currentVolume: root.volumeLevel;
+        filteringMode: root.filtering;
         stretchVideo: root.stretchVideo;
 
         //property real ratio: width / height;
 
-        onRunChanged: {
+        onIsRunningChanged: {
             if (isRunning)
                 headerBar.playIcon = "/assets/GameView/pause.png";
             else
@@ -150,7 +152,7 @@ Rectangle {
         }
 
 
-        onSetWindowedChanged: {
+        onIsWindowedChanged: {
             if (root.visibility == Window.FullScreen)
                 root.swapScreenSize();
         }
@@ -171,9 +173,9 @@ Rectangle {
 
          anchors {
             right: parent.right;
-            top: parent.top;
-            rightMargin: 5;
-            topMargin: 60;
+            bottom: parent.bottom;
+            rightMargin: 16;
+            topMargin: 16;
         }
     }
 }

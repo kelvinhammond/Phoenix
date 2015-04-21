@@ -1,10 +1,9 @@
 #include "core.h"
 #include "phoenixglobals.h"
 
-//  ________________________
-// |                        |
-// |        Globals         |
-// |________________________|
+//
+// Globals
+//
 
 QDebug operator<<( QDebug debug, const Core::Variable &var ) {
     // join a QVector of std::strings. (Really, C++ ?)
@@ -27,19 +26,15 @@ QDebug operator<<( QDebug debug, const Core::Variable &var ) {
     return debug;
 }
 
-//  ________________________
-// |                        |
-// |    Static variables    |
-// |________________________|
+//
+// Static variables
+//
 
-
-// Must always point to the last Core instance used
 Core *Core::coreStatic = nullptr;
 
-//  ________________________
-// |                        |
-// |      Constructors      |
-// |________________________|
+//
+// Constructors
+//
 
 LibretroSymbols::LibretroSymbols() {
     retro_audio = nullptr;
@@ -61,7 +56,7 @@ Core::Core() {
     video_width = 0;
     pixel_format = RETRO_PIXEL_FORMAT_UNKNOWN;
 
-    isCurrentFrameDupe = false;
+    currentFrameIsDupe = false;
     SRAMDataRaw = nullptr;
 
     Core::coreStatic = this;
@@ -69,7 +64,7 @@ Core::Core() {
     setSaveDirectory( phxGlobals.savePath() );
     setSystemDirectory( phxGlobals.biosPath() );
 
-} // Core::Core()
+}
 
 Core::~Core() {
     qCDebug( phxCore ) << "Began unloading core";
@@ -78,7 +73,7 @@ Core::~Core() {
     methods->retro_deinit();
     library->unload();
     gameData.clear();
-    libraryName.clear();
+    libraryFilename.clear();
 
     delete library;
     delete AVInfo;
@@ -86,30 +81,55 @@ Core::~Core() {
     delete systemInfo;
     qCDebug( phxCore ) << "Finished unloading core";
 
-} // Core::~Core()
-
-//  ________________________
-// |                        |
-// |     Public methods     |
-// |________________________|
-
-
-//  ________________________
-// |                        |
-// |    Private methods     |
-// |________________________|
+}
 
 //
-// Control
+// Public slots
 //
 
-bool Core::loadCore( const char *path ) {
+void Core::loadCore( const char *path ) {
+
+    emit coreState( CoreController::Busy );
+
+    // First, check if the extension is correct
+    if( !QLibrary::isLibrary( path ) ) {
+        emit coreState( CoreController::Error );
+        emit coreError( CoreController::CoreNotLibraryError );
+        return;
+    }
+
+    // Now check if the core file given even exists and can be opened for reading
+    QFileInfo info( path );
+    QFile core( info.canonicalFilePath() );
+
+    if( !core.exists() ) {
+        emit coreState( CoreController::Error );
+        emit coreError( CoreController::CoreNotFound );
+        return;
+    }
+
+    if( !core.open( QIODevice::ReadOnly ) ) {
+        if( core.error() == QFileDevice::PermissionsError ) {
+            emit coreState( CoreController::Error );
+            emit coreError( CoreController::CoreAccessDenied );
+            return;
+        }
+
+        else {
+            emit coreState( CoreController::Error );
+            emit coreError( CoreController::CoreLoadError );
+            return;
+        }
+    }
+
+    core.close();
+
     library = new QLibrary( path );
     library->load();
 
     if( library->isLoaded() ) {
 
-        libraryName = library->fileName().toLocal8Bit();
+        libraryFilename = library->fileName().toLocal8Bit();
 
         // Resolve symbols
         resolved_sym( retro_set_environment );
@@ -153,77 +173,96 @@ bool Core::loadCore( const char *path ) {
 
         // Get some info about the game
         methods->retro_get_system_info( systemInfo );
-        coreNeedsFullPath = systemInfo->need_fullpath;
+        coreReadsFileDirectly = systemInfo->need_fullpath;
 
-        return true;
+        // Everything went well, ready to load a game
+        emit coreState( CoreController::GameNeeded );
+        return;
 
     }
 
-    return false;
+    emit coreState( CoreController::Error );
+    emit coreError( CoreController::CoreUnknownError);
+    return;
 
-} // Core::loadCore()
+}
 
-bool Core::loadGame( const char *path ) {
-    // create a retro_game_info struct, load with data (created on stack)
-    retro_game_info game_info;
+void Core::loadGame( const char *path ) {
 
-    // full path needed, pass this file path to the core
+    emit coreState( CoreController::Busy );
 
     QFileInfo info( path );
 
-    //QString file_name = info.baseName() + "." + info.suffix();
-    //qDebug() << "suffix: " << file_name;
+    QFile game( info.canonicalFilePath() );
 
-    /*if (info.suffix() == "cue") {
-        full_path_needed = false;
-        QFile cue_file(info.canonicalFilePath());
-        if (cue_file.open(QIODevice::Text | QIODevice::ReadOnly)) {
-            while (!cue_file.atEnd()) {
-                QString line = cue_file.readLine().toLower();
-                if (line.contains("file"))
-                    file_name = line.split(" ").at(1).remove('"');
-                qCDebug(phxLibrary) << line;
-            }
-            cue_file.close();
-        }
-    }*/
-
-    //info.setFile(info.canonicalPath() + file_name);
-
-    if( coreNeedsFullPath ) {
-        game_info.path = path;
-        game_info.data = nullptr;
-        game_info.size = 0;
-        game_info.meta = "";
+    // Check if the game file exists
+    if( !game.exists() ) {
+        emit coreState( CoreController::Error );
+        emit coreError( CoreController::GameNotFound );
+        return;
     }
 
-    else {
-        // full path not needed, read the file to a buffer and pass that to the core
+    // Attempt to open the file (we're opening it even if we're not going to read it)
+    bool ret = game.open( QIODevice::ReadOnly );
 
-
-        QFile game( info.canonicalFilePath() );
-
-        if( !game.open( QIODevice::ReadOnly ) ) {
-            return false;
+    // Deal with file open errors
+    if( !ret ) {
+        if( game.error() == QFileDevice::PermissionsError ) {
+            emit coreState( CoreController::Error );
+            emit coreError( CoreController::GameAccessDenied );
+            return;
         }
 
-        // read into memory
+        else {
+            emit coreState( CoreController::Error );
+            emit coreError( CoreController::GameUnknownError );
+            return;
+        }
+    }
+
+    // Core only needs the path, it'll handle the file itself
+    if( coreReadsFileDirectly ) {
+
+        // We don't need to know anything else about the file other than we can open it for reading
+        game.close();
+
+        gameInfo.path = path;
+        gameInfo.data = nullptr;
+        gameInfo.size = 0;
+        gameInfo.meta = "";
+    }
+
+    // Full path not needed, read the file to a buffer and pass that to the core
+    else {
+
+        // Clear gameData explicitly if it has any data
+        // I don't think QByteArray uses reference counting
+        if( gameData.size() ) {
+            gameData.clear();
+        }
+
+        // Read entire file into memory
         gameData = game.readAll();
 
-        game_info.path = nullptr;
-        game_info.data = gameData.data();
-        game_info.size = game.size();
-        game_info.meta = "";
+        gameInfo.path = nullptr;
+        gameInfo.data = gameData.data();
+        gameInfo.size = game.size();
+        gameInfo.meta = "";
+
+        game.close();
 
     }
 
-    bool ret = methods->retro_load_game( &game_info );
+    // Let the core open the game
+    ret = methods->retro_load_game( &gameInfo );
+
+    if( !ret ) {
+        emit coreState( CoreController::Error );
+        emit coreError( CoreController::GameUnknownError );
+        return;
+    }
 
     // Get some info about the game
-    if( !ret ) {
-        return false;
-    }
-
     methods->retro_get_system_av_info( AVInfo );
     game_geometry = AVInfo->geometry;
     timing = AVInfo->timing;
@@ -232,32 +271,32 @@ bool Core::loadGame( const char *path ) {
 
     loadSRAM();
 
-    return true;
+    emit coreState( CoreController::Ready );
+    return;
 
-} // Core::loadGame()
+}
 
 void Core::doFrame() {
-    // Update the static pointer
-    coreStatic = this;
 
     // Tell the core to run a frame
     methods->retro_run();
 
-    if( methods->retro_audio ) {
+    // Should never be used
+    /*if( methods->retro_audio ) {
         methods->retro_audio();
-    }
+    }*/
 
-} // void doFrame()
+}
 
 //
+// Private
+//
+
 // Misc
-//
 
 LibretroSymbols *Core::getSymbols() {
     return methods;
-
-} // Core::getSymbols()
-
+}
 
 bool Core::saveGameState( QString path, QString name ) {
     Q_UNUSED( path );
@@ -290,7 +329,7 @@ bool Core::saveGameState( QString path, QString name ) {
     delete[] data;
     return loaded;
 
-} // Core::saveGameState(QString path, char *data, int size)
+}
 
 bool Core::loadGameState( QString path, QString name ) {
     Q_UNUSED( path );
@@ -315,29 +354,23 @@ bool Core::loadGameState( QString path, QString name ) {
 
     return loaded;
 
-} // Core::loadGameState(QString path)
+}
 
-//
 // Video
-//
 
-//
 // Audio
-//
 
-//
 // System
-//
 
 void Core::setSystemDirectory( QString system_dir ) {
     systemDirectory = system_dir.toLocal8Bit();
 
-} // Core::setSystemDirectory(QString system_dir)
+}
 
 void Core::setSaveDirectory( QString save_dir ) {
     saveDirectory = save_dir.toLocal8Bit();
 
-} // Core::setSaveDirectory()
+}
 
 void Core::saveSRAM() {
     if( SRAMDataRaw == nullptr ) {
@@ -353,7 +386,7 @@ void Core::saveSRAM() {
         file.write( data, size );
         file.close();
     }
-} // Core::saveSRAM()
+}
 
 void Core::loadSRAM() {
     SRAMDataRaw = methods->retro_get_memory_data( RETRO_MEMORY_SAVE_RAM );
@@ -368,12 +401,9 @@ void Core::loadSRAM() {
         file.close();
     }
 
-} // Core::loadSRAM()
+}
 
-//  ________________________
-// |                        |
-// |       Callbacks        |
-// |________________________|
+// Callbacks (static)
 
 void Core::audioSampleCallback( int16_t left, int16_t right ) {
     if( coreStatic->audioBuffer ) {
@@ -381,7 +411,7 @@ void Core::audioSampleCallback( int16_t left, int16_t right ) {
         coreStatic->audioBuffer->write( ( const char * )&sample, sizeof( int16_t ) * 2 );
     }
 
-} // Core::audioSampleCallback()
+}
 
 size_t Core::audioSampleBatchCallback( const int16_t *data, size_t frames ) {
     if( coreStatic->audioBuffer ) {
@@ -390,7 +420,7 @@ size_t Core::audioSampleBatchCallback( const int16_t *data, size_t frames ) {
 
     return frames;
     
-} // Core::audioSampleBatchCallback()
+}
 
 bool Core::environmentCallback( unsigned cmd, void *data ) {
     switch( cmd ) {
@@ -610,13 +640,13 @@ bool Core::environmentCallback( unsigned cmd, void *data ) {
     // Command was not handled
     return false;
     
-} // Core::environmentCallback()
+}
 
 void Core::inputPollCallback( void ) {
     // qDebug() << "Core::inputPollCallback";
     return;
     
-} // Core::inputPollCallback()
+}
 
 int16_t Core::inputStateCallback( unsigned port, unsigned device, unsigned index, unsigned id ) {
     Q_UNUSED( index )
@@ -638,7 +668,7 @@ int16_t Core::inputStateCallback( unsigned port, unsigned device, unsigned index
     // we don't handle index for now...
     return deviceobj->state( id );
 
-} // Core::inputStateCallback()
+}
 
 void Core::logCallback( enum retro_log_level level, const char *fmt, ... ) {
     QVarLengthArray<char, 1024> outbuf( 1024 );
@@ -692,7 +722,7 @@ void Core::logCallback( enum retro_log_level level, const char *fmt, ... ) {
             break;
     }
 
-} // Core::retro_log()
+}
 
 void Core::videoRefreshCallback( const void *data, unsigned width, unsigned height, size_t pitch ) {
 
@@ -700,9 +730,9 @@ void Core::videoRefreshCallback( const void *data, unsigned width, unsigned heig
 
     if( data ) {
         coreStatic->videoBuffer = data;
-        coreStatic->isCurrentFrameDupe = false;
+        coreStatic->currentFrameIsDupe = false;
     } else {
-        coreStatic->isCurrentFrameDupe = true;
+        coreStatic->currentFrameIsDupe = true;
     }
 
     coreStatic->video_width = width;
@@ -713,5 +743,5 @@ void Core::videoRefreshCallback( const void *data, unsigned width, unsigned heig
 
     return;
     
-} // Core::videoRefreshCallback()
+}
 

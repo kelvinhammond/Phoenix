@@ -10,22 +10,22 @@ VideoItem::VideoItem() {
     Q_CHECK_PTR( audio );
 
     texture = nullptr;
-    m_libcore = "";
-    m_stretch_video = false;
-    m_filtering = 2;
-    m_aspect_ratio = 0.0;
-    m_fps = 0;
+    corePath = "";
+    stretchVideo = false;
+    filteringMode = 2;
+    aspectRatio = 0.0;
+    currentFPS = 0;
     audio->startAudioThread();
     core->audioBuffer = audio->getAudioBuf();
-    m_volume = 1.0;
+    currentVolume = 1.0;
 
     connect( &fps_timer, &QTimer::timeout, this, &VideoItem::updateFps );
     frame_timer.invalidate();
     fps_deviation = 0;
     fps_count = 0;
 
-    connect( this, &VideoItem::runChanged, audio, &Audio::slotRunChanged );
-    connect( this, &VideoItem::volumeChanged, audio, &Audio::slotSetVolume );
+    connect( this, &VideoItem::isRunningChanged, audio, &Audio::slotRunChanged );
+    connect( this, &VideoItem::currentVolumeChanged, audio, &Audio::slotSetVolume );
     connect( this, &VideoItem::windowChanged, this, &VideoItem::handleWindowChanged );
 }
 
@@ -77,47 +77,47 @@ void VideoItem::handleSceneGraphInitialized() {
 
 void VideoItem::setWindowed( bool windowVisibility ) {
 
-    m_set_windowed = windowVisibility;
-    emit setWindowedChanged( windowVisibility );
+    isWindowed = windowVisibility;
+    emit isWindowedChanged( windowVisibility );
 
 }
 
 void VideoItem::setVolume( qreal volume ) {
-    m_volume = volume;
-    emit volumeChanged( volume );
+    currentVolume = volume;
+    emit currentVolumeChanged( volume );
 
 }
 
-void VideoItem::setSystemDirectory( QString systemDirectory ) {
-    m_system_directory = systemDirectory;
-    core->setSystemDirectory( m_system_directory );
-    emit systemDirectoryChanged();
+void VideoItem::setSystemPath( QString systemDirectory ) {
+    systemPath = systemDirectory;
+    core->setSystemDirectory( systemPath );
+    emit systemPathChanged();
 }
 
 void VideoItem::setAspectRatio( qreal aspectRatio ) {
-    m_aspect_ratio = aspectRatio;
+    aspectRatio = aspectRatio;
     emit aspectRatioChanged();
 }
 
 
 void VideoItem::saveGameState() {
-    QFileInfo info( m_game );
+    QFileInfo info( gamePath );
 
-    if( m_game != "" && m_libcore != "" ) {
+    if( gamePath != "" && corePath != "" ) {
         core->saveGameState( phxGlobals.savePath(), info.baseName() );
     }
 
 }
 
 void VideoItem::loadGameState() {
-    QFileInfo info( m_game );
+    QFileInfo info( gamePath );
 
     if( core->loadGameState( phxGlobals.savePath(), info.baseName() ) ) {
         qDebug() << "Save State loaded";
     }
 }
 
-void VideoItem::setCore( QString libcore ) {
+void VideoItem::setLibretroCorePath( QString libcore ) {
     if( libcore == "" ) {
         return;
     }
@@ -131,16 +131,16 @@ void VideoItem::setCore( QString libcore ) {
 
     const retro_system_info *i = core->getSystemInfo();
     qCDebug( phxVideo ) << "Loaded core" << i->library_name << i->library_version;
-    m_libcore = libcore;
-    emit libcoreChanged( libcore );
+    corePath = libcore;
+    emit corePathChanged( libcore );
 }
 
-void VideoItem::setGame( QString game ) {
+void VideoItem::setGamePath( QString game ) {
     if( game == "" ) {
         return;
     }
 
-    m_game = game;
+    gamePath = game;
     qCDebug( phxVideo ) << "Loading game:" << game;
 
     if( !core->loadGame( game.toStdString().c_str() ) ) {
@@ -152,12 +152,12 @@ void VideoItem::setGame( QString game ) {
     qCDebug( phxVideo, "Loaded game at %ix%i @ %.2ffps", core->getBaseWidth(),
              core->getBaseHeight(), core->getFps() );
     updateAudioFormat();
-    emit gameChanged( game );
+    emit gamePathChanged( game );
 }
 
 
-void VideoItem::setRun( bool run ) {
-    m_run = run;
+void VideoItem::setIsRunning( bool run ) {
+    isRunning = run;
 
     if( run ) {
         qCDebug( phxVideo, "Core started" );
@@ -166,16 +166,16 @@ void VideoItem::setRun( bool run ) {
         qCDebug( phxVideo, "Core paused" );
     }
 
-    emit runChanged( run );
+    emit isRunningChanged( run );
 }
 
-void VideoItem::setFiltering( int filtering ) {
-    m_filtering = filtering;
+void VideoItem::setFilteringMode( int filtering ) {
+    filteringMode = filtering;
     emit filteringChanged();
 }
 
 void VideoItem::setStretchVideo( bool stretchVideo ) {
-    m_stretch_video = stretchVideo;
+    stretchVideo = stretchVideo;
     emit stretchVideoChanged();
 }
 
@@ -205,17 +205,20 @@ void VideoItem::keyEvent( QKeyEvent *event ) {
     bool is_pressed = ( event->type() == QEvent::KeyPress ) ? true : false;
 
     switch( event->key() ) {
+
+        // Esc: Leave full screen
         case Qt::Key_Escape:
             if( is_pressed ) {
-                emit setWindowedChanged( true );
+                emit isWindowedChanged( true );
                 event->accept();
             }
 
             break;
 
+        // Space: Pause game
         case Qt::Key_Space:
             if( is_pressed ) {
-                setRun( m_run ? false : true );
+                setIsRunning( isRunning ? false : true );
                 event->accept();
             }
 
@@ -294,7 +297,7 @@ QSGNode *VideoItem::updatePaintNode( QSGNode *old_node, UpdatePaintNodeData *pai
     tex_node->setTexture( texture );
     tex_node->setTextureCoordinatesTransform( QSGSimpleTextureNode::MirrorVertically );
     tex_node->setRect( boundingRect() );
-    tex_node->setFiltering( static_cast<QSGTexture::Filtering>( filtering() ) );
+    tex_node->setFiltering( static_cast<QSGTexture::Filtering>( filteringMode() ) );
 
     return tex_node;
 
