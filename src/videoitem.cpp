@@ -16,7 +16,7 @@ VideoItem::VideoItem() {
     connect( &audio, &Audio::signalStartTimer, &audioTimer, static_cast<void ( QTimer::* )( void )> ( &QTimer::start ) );
     connect( &audio, &Audio::signalStopTimer, &audioTimer, &QTimer::stop );
 
-    audioThread.start();
+    audioThread.start( QThread::HighestPriority );
 
     // This operation is not thread-safe, but audioBuf never changes throughout the life of audio, so I suppose it doesn't matter?
     core.audio_buf = audio.getAudioBuf();

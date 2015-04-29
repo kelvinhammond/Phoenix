@@ -24,9 +24,9 @@ Audio::~Audio() {
         delete audioOut;
     }
 
-    if( audioOutIODev ) {
-        delete audioOutIODev;
-    }
+    //if( audioOutIODev ) {
+    //    delete audioOutIODev;
+    //}
 
     if( outputDataFloat ) {
         delete outputDataFloat;
@@ -84,13 +84,10 @@ void Audio::slotHandleFormatChanged() {
         audioOut->suspend();
     }
 
-    //audioOutIODev->moveToThread( &audioThread );
-
     // This is where the amount of time that passes between audio updates is set
     // At timer intervals this low on most OSes the jitter is quite significant
-    // Try to grab data from the input buffer at least every frame
-    // qint64 durationInMs = audioFormatOut.durationForBytes( audioOut->periodSize() * 1.0 ) / 1000;
-    qint64 durationInMs = 16;
+    // Try to grab data from the input buffer as often as possible
+    qint64 durationInMs = 1;
     qCDebug( phxAudio ) << "Timer interval set to" << durationInMs << "ms, Period size" << audioOut->periodSize() << "bytes, buffer size" << audioOut->bufferSize() << "bytes";
 
 
@@ -150,9 +147,10 @@ void Audio::slotHandlePeriodTimer() {
     auto samplesPerFrame = 2;
 
     // Max number of bytes/frames we can write to the output
-    auto outputBytesFree = audioOut->bytesFree();
-    auto outputFramesFree = audioFormatOut.framesForBytes( outputBytesFree );
-    // auto outputSamplesFree = outputFramesFree * samplesPerFrame;
+    int outputBytesFree = audioOut->bytesFree();
+    int outputFramesFree = audioFormatOut.framesForBytes( outputBytesFree );
+    int outputSamplesFree = outputFramesFree * samplesPerFrame;
+    Q_UNUSED( outputSamplesFree );
 
     // If output buffer is somehow full despite DRC, empty it
     if( !outputBytesFree ) {
@@ -161,62 +159,90 @@ void Audio::slotHandlePeriodTimer() {
         return;
     }
 
-    // Compute the exact number of bytes to read from the circular buffer to
-    // produce outputBytesFree bytes of output; Taking resampling and DRC into account
+    // TODO: Make these configurable
+    int outputBufferTargetMs = 100;
     double maxDeviation = 0.005;
-    auto outputBufferTargetPoint = audioOut->bufferSize() / 2;
-    auto distanceFromTarget = outputBufferTargetPoint - ( audioOut->bufferSize() - outputBytesFree );
-    double direction = ( double )distanceFromTarget / outputBufferTargetPoint;
-    double adjust = 1.0 + maxDeviation * direction;
+
+#ifdef Q_OS_MACX
+    outputBufferTargetMs = 32;
+#endif
+
+    // Calculate the ideal (maximum) amount we should read from the input
+    // If this amount is actually read, no DRC needed
+    int outputBufferTargetPoint = audioFormatOut.bytesForDuration( outputBufferTargetMs * 1000 );
+    int outputBufferDistanceFromTarget = outputBufferTargetPoint - ( audioOut->bufferSize() - outputBytesFree );
+    double driftRatio = ( double )outputBufferDistanceFromTarget / outputBufferTargetPoint;
+    double adjust = 1.0 + maxDeviation * driftRatio;
     double adjustedSampleRateRatio = sampleRateRatio * adjust;
-    auto audioFormatTemp = audioFormatIn;
-    audioFormatTemp.setSampleRate( audioFormatOut.sampleRate() * adjustedSampleRateRatio );
-    auto inputBytesToRead = audioFormatTemp.bytesForDuration( audioFormatOut.durationForBytes( distanceFromTarget < 0 ? 0 : distanceFromTarget ) );
+    int inputBytesToRead = audioFormatIn.bytesForDuration( audioFormatOut.durationForBytes( outputBufferDistanceFromTarget > 0 ? outputBufferDistanceFromTarget : 0 ) );
 
-    // Read the input data
-    auto inputBytesRead = audioBuf->read( inputDataChar, inputBytesToRead );
-    auto inputFramesRead = audioFormatIn.framesForBytes( inputBytesRead );
-    auto inputSamplesRead = inputFramesRead * samplesPerFrame;
+    // Consume top half of the input buffer
+    //int inputBytesToRead = ( audioBuf->size() > 8192 ) ? audioBuf->size() - 8192 : 0;
 
-    // libsamplerate works in floats, must convert to floats for processing
-    src_short_to_float_array( ( short * )inputDataChar, inputDataFloat, inputSamplesRead );
-
-    // Set up a struct containing parameters for the resampler
-    SRC_DATA srcData;
-    srcData.data_in = inputDataFloat;
-    srcData.data_out = outputDataFloat;
-    srcData.end_of_input = 0;
-    srcData.input_frames = inputFramesRead;
-    srcData.output_frames = outputFramesFree; // Max size
-    srcData.src_ratio = adjustedSampleRateRatio;
-
-    // Perform resample
-    src_set_ratio( resamplerState, adjustedSampleRateRatio );
-    auto errorCode = src_process( resamplerState, &srcData );
-
-    if( errorCode ) {
-        qCWarning( phxAudio ) << "libresample error: " << src_strerror( errorCode ) ;
-    }
-
-    auto outputFramesConverted = srcData.output_frames_gen;
-    auto outputBytesConverted = audioFormatOut.bytesForFrames( outputFramesConverted );
-    auto outputSamplesConverted = outputFramesConverted * samplesPerFrame;
-
-    // Convert float data back to shorts
-    src_float_to_short_array( outputDataFloat, outputDataShort, outputSamplesConverted );
-
-    int outputBytesWritten = audioOutIODev->write( ( char * ) outputDataShort, outputBytesConverted );
+    int inputBytesRead = 0, inputSamplesRead = 0, inputFramesRead = 0;
+    int outputBytesWritten = 0;
     Q_UNUSED( outputBytesWritten );
 
-    /*
+    if( inputBytesToRead ) {
+
+        // Read the input data
+        inputBytesRead = audioBuf->read( inputDataChar, inputBytesToRead );
+        inputFramesRead = audioFormatIn.framesForBytes( inputBytesRead );
+        inputSamplesRead = inputFramesRead * samplesPerFrame;
+
+        // Calculate the actual sample rate ratio needed to stretch the read data to fit the deficit in the buffer
+        // Based on the amount actually read from input
+        auto inputAudioRoomToStretch = outputBufferTargetPoint - audioFormatOut.bytesForDuration( audioFormatIn.durationForBytes( inputBytesRead ) );
+        auto driftRatio = ( double )inputAudioRoomToStretch / outputBufferTargetPoint;
+        auto adjust = 1.0 + maxDeviation * driftRatio;
+        auto adjustedSampleRateRatio = sampleRateRatio * adjust;
+
+        // libsamplerate works in floats, must convert to floats for processing
+        src_short_to_float_array( ( short * )inputDataChar, inputDataFloat, inputSamplesRead );
+
+        // Set up a struct containing parameters for the resampler
+        SRC_DATA srcData;
+        srcData.data_in = inputDataFloat;
+        srcData.data_out = outputDataFloat;
+        srcData.end_of_input = 0;
+        srcData.input_frames = inputFramesRead;
+        srcData.output_frames = outputFramesFree; // Max size
+        srcData.src_ratio = adjustedSampleRateRatio;
+
+        // Perform resample
+        src_set_ratio( resamplerState, adjustedSampleRateRatio );
+        auto errorCode = src_process( resamplerState, &srcData );
+
+        if( errorCode ) {
+            qCWarning( phxAudio ) << "libresample error: " << src_strerror( errorCode ) ;
+        }
+
+        auto outputFramesConverted = srcData.output_frames_gen;
+        auto outputBytesConverted = audioFormatOut.bytesForFrames( outputFramesConverted );
+        auto outputSamplesConverted = outputFramesConverted * samplesPerFrame;
+
+        // Convert float data back to shorts
+        src_float_to_short_array( outputDataFloat, outputDataShort, outputSamplesConverted );
+
+        qCDebug( phxAudio ) << "audioOut->bytesFree() =" << audioOut->bytesFree();
+
+        outputBytesWritten = audioOutIODev->write( ( char * ) outputDataShort, outputBytesConverted );
+        audioOutIODev->waitForBytesWritten( -1 );
+
+    }
+
     qCDebug( phxAudio ) << "Input is" << ( audioBuf->size() * 100 / audioFormatIn.bytesForFrames( 4096 ) ) << "% full, output is"
                         << ( ( ( double )( audioOut->bufferSize() - outputBytesFree ) / audioOut->bufferSize() ) * 100 )  << "% full ; DRC:" << adjust
-                        << ";" << inputBytesToRead << audioFormatIn.bytesForDuration( audioFormatOut.durationForBytes( outputBytesFree ) ) << sampleRateRatio << adjustedSampleRateRatio;
+                        << ";" << inputBytesToRead << driftRatio << sampleRateRatio << adjustedSampleRateRatio;
     qCDebug( phxAudio ) << "\tInput: needed" << inputBytesToRead << "bytes, read" << inputBytesRead << "bytes";
-    qCDebug( phxAudio ) << "\tOutput: needed" << distanceFromTarget << "bytes, wrote" << outputBytesWritten << "bytes";
-    qCDebug( phxAudio ) << "\toutputBytesFree =" << outputBytesFree << "outputBufferTargetPoint =" << outputBufferTargetPoint << "distanceFromTarget =" << distanceFromTarget;
-    qCDebug( phxAudio ) << "Input: needed" << audioFormatIn.framesForBytes( inputBytesToRead ) << "frames, read" << audioFormatIn.framesForBytes( inputBytesRead ) << "frames";
-    qCDebug( phxAudio ) << "Output: needed" << audioFormatOut.framesForBytes( outputBytesToWrite ) << "frames, wrote" << audioFormatOut.framesForBytes( outputBytesWritten ) << "frames";
+    qCDebug( phxAudio ) << "\tOutput: needed" << outputBufferDistanceFromTarget << "bytes, wrote" << outputBytesWritten << "bytes";
+    qCDebug( phxAudio ) << "\toutputBytesFree =" << outputBytesFree
+                        << "outputBufferTargetPoint =" << outputBufferTargetPoint
+                        << "outputBufferDistanceFromTarget =" << outputBufferDistanceFromTarget
+                        << "audioOut->bufferSize() =" << audioOut->bufferSize()
+                        << "audioOutIODev->bytesToWrite() =" << audioOutIODev->bytesToWrite();
+    qCDebug( phxAudio ) << "\tOutput buffer is" << audioFormatOut.durationForBytes( audioOut->bufferSize() ) / 1000 << "ms, buffer target is" << outputBufferTargetMs << "ms";
+    /*
     */
 
 }
