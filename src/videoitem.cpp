@@ -8,6 +8,11 @@ VideoItem::VideoItem() {
     audioThread.setObjectName( "phoenix-audio" );
     audio.moveToThread( &audioThread );
     audioTimer.moveToThread( &audioThread );
+    audio.audioTimer = &audioTimer; // Probably not thread-safe SHHH
+
+    // This is where the amount of time that passes between audio updates is set
+    // At timer intervals this low on most OSes the jitter is quite significant
+    // Try to grab data from the input buffer once per frame
     audioTimer.setInterval( 16 );
 
     connect( &audioThread, &QThread::started, &audio, &Audio::slotThreadStarted );
@@ -16,7 +21,7 @@ VideoItem::VideoItem() {
     connect( &audio, &Audio::signalStartTimer, &audioTimer, static_cast<void ( QTimer::* )( void )> ( &QTimer::start ) );
     connect( &audio, &Audio::signalStopTimer, &audioTimer, &QTimer::stop );
 
-    audioThread.start( QThread::HighestPriority );
+    audioThread.start();
 
     // This operation is not thread-safe, but audioBuf never changes throughout the life of audio, so I suppose it doesn't matter?
     core.audio_buf = audio.getAudioBuf();
@@ -207,7 +212,7 @@ void VideoItem::updateAudioFormat() {
     format.setByteOrder( QAudioFormat::LittleEndian );
     format.setCodec( "audio/pcm" );
     // TODO test format
-    audio.setInFormat( format );
+    audio.setInFormat( format, core.getFps() );
 }
 
 void VideoItem::keyEvent( QKeyEvent *event ) {
