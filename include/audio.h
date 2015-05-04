@@ -74,7 +74,7 @@ class Audio : public QObject {
 
         std::unique_ptr<AudioBuffer>audioInputBuffer;
 
-        char silence[10000] = {0};
+        char silence[100000] = {0};
 
 };
 
